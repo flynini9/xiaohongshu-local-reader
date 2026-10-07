@@ -1,0 +1,30 @@
+{
+  "name": "xiaohongshu-local-reader",
+  "version": "0.2.0",
+  "description": "通过用户本机已登录浏览器和本地 MCP 服务读取小红书页面、笔记和搜索结果。",
+  "author": {
+    "name": "flynini9 & Zhi"
+  },
+  "keywords": [
+    "xiaohongshu",
+    "小红书",
+    "mcp",
+    "local-browser",
+    "read-only"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "小红书本地读取器",
+    "shortDescription": "在你的登录态下读取小红书内容",
+    "longDescription": "通过本机已登录浏览器的可见页面读取小红书当前页面、公开笔记和搜索结果。只读，不读取或转发 Cookie，不绕过登录、验证码或平台访问控制。",
+    "developerName": "flynini9 & Zhi",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Search"
+    ],
+    "defaultPrompt": "读取我当前打开的小红书页面并总结重点。",
+    "brandColor": "#FF2442"
+  }
+}

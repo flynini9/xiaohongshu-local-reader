@@ -1,0 +1,17 @@
+{
+  "name": "xiaohongshu-local-reader",
+  "version": "0.2.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "Local read-only MCP bridge for a user-authenticated Xiaohongshu browser session.",
+  "engines": { "node": ">=22.4.0" },
+  "keywords": ["xiaohongshu", "mcp", "local-browser", "read-only", "cdp"],
+  "scripts": {
+    "start": "node scripts/server.mjs",
+    "check": "node scripts/check-syntax.mjs",
+    "test:mcp": "node scripts/test-mcp.mjs",
+    "test:transport": "node scripts/test-transport-security.mjs",
+    "test": "node scripts/test-page-state.mjs && node scripts/test-note.mjs && node scripts/test-note-text.mjs && node scripts/test-privacy.mjs && node scripts/test-transport-security.mjs"
+  }
+}
