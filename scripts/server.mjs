@@ -6,18 +6,22 @@ import { extractNoteMedia } from "./lib/note-media.mjs";
 import { findTokenizedNoteUrl, NoteUrlCache, tokenizedNoteUrl } from "./lib/note-url.mjs";
 import { chooseNoteText } from "./lib/note-text.mjs";
 import { retrySnapshotEvaluate } from "./lib/retry-snapshot.mjs";
+import { fetchImageBlock } from "./lib/image-attachments.mjs";
 
 const HOST = process.env.HOST || "127.0.0.1";
 const PORT = Number(process.env.PORT || 3333);
 const CDP_ENDPOINT = (process.env.CDP_ENDPOINT || "http://127.0.0.1:9222").replace(/\/$/, "");
 const PAGE_TIMEOUT_MS = Math.min(Math.max(Number(process.env.XHS_PAGE_TIMEOUT_MS || 8000), 1000), 15000);
 const MAX_BODY_BYTES = 512 * 1024;
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_IMAGE_TOTAL_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_ATTACHMENTS = 20;
 const MCP_PROTOCOL_VERSION = "2025-03-26";
 const READER_TOKEN = process.env.XHS_READER_TOKEN || "";
 const noteUrlCache = new NoteUrlCache();
 
 const SERVER_INSTRUCTIONS =
-  "这是一个只读的小红书本地浏览器桥接。先用 xiaohongshu_status 检查本机浏览器和登录态；需要读取时只使用用户已登录浏览器中可见的页面。不要索取、输出或推断 Cookie、localStorage、验证码或登录凭据，也不要绕过登录、验证码、风控或访问限制。";
+  "这是一个只读的小红书本地浏览器桥接。先用 xiaohongshu_status 检查本机浏览器和登录态；需要读取时只使用用户已登录浏览器中可见的页面。不要索取、输出或推断 Cookie、localStorage、验证码或登录凭据，也不要绕过登录、验证码、风控或访问限制。读取笔记时，xiaohongshu_get_note / xiaohongshu_current_page 可能在文本结果后附带真实图片 content block；如果客户端支持视觉输入，可以直接结合这些图片理解笔记，不要只把图片 URL 当作图片内容。";
 
 const TOOLS = [
   {
@@ -34,7 +38,7 @@ const TOOLS = [
   {
     name: "xiaohongshu_current_page",
     title: "读取当前小红书页面",
-    description: "按实际 URL 和可见 DOM 识别并结构化读取当前页面；聊天页仅返回安全概要。",
+    description: "按实际 URL 和可见 DOM 识别并结构化读取当前页面；笔记页会尽力附带正文图片供视觉理解，聊天页仅返回安全概要。",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
     annotations: {
       readOnlyHint: true,
@@ -63,7 +67,7 @@ const TOOLS = [
   {
     name: "xiaohongshu_get_note",
     title: "读取小红书笔记",
-    description: "读取笔记；url 保留完整查询参数，noteId 只复用当前 DOM 或短期内存中已有的真实完整笔记链接，找不到时不导航。",
+    description: "读取笔记；url 保留完整查询参数，noteId 只复用当前 DOM 或短期内存中已有的真实完整笔记链接，找不到时不导航；正文图片会尽力作为 MCP image content block 一并返回，供支持视觉输入的客户端直接理解。",
     inputSchema: {
       type: "object",
       properties: {
@@ -273,6 +277,51 @@ function assertNoteId(value) {
   const noteId = typeof value === "string" ? value.trim() : "";
   if (!/^[A-Za-z0-9_-]{1,200}$/.test(noteId)) throw new Error("noteId 必须是 1 到 200 位的笔记 ID。");
   return noteId;
+}
+
+async function formatToolResult(name, result) {
+  const imageBlocks = [];
+  const imageAttachmentWarnings = [];
+  let attachedImageBytes = 0;
+  const shouldAttachImages = ["xiaohongshu_get_note", "xiaohongshu_current_page"].includes(name)
+    && result?.pageKind === "note_page"
+    && Array.isArray(result.images)
+    && result.images.length > 0;
+  if (shouldAttachImages) {
+    const candidates = result.images.slice(0, MAX_IMAGE_ATTACHMENTS);
+    for (let index = 0; index < candidates.length; index++) {
+      const remaining = MAX_IMAGE_TOTAL_BYTES - attachedImageBytes;
+      if (remaining <= 0) {
+        imageAttachmentWarnings.push("图片附件达到本次总大小上限，后续图片仅保留 URL。");
+        break;
+      }
+      try {
+        const image = await fetchImageBlock(candidates[index], Math.min(MAX_IMAGE_BYTES, remaining));
+        imageBlocks.push(image.content);
+        attachedImageBytes += image.bytes;
+      } catch (error) {
+        imageAttachmentWarnings.push(`第 ${index + 1} 张图片未附加：${error.message}`);
+      }
+    }
+    if (result.images.length > MAX_IMAGE_ATTACHMENTS) {
+      imageAttachmentWarnings.push(`本次最多附加 ${MAX_IMAGE_ATTACHMENTS} 张图片，其余图片仍保留 URL。`);
+    }
+  }
+  const structuredContent = shouldAttachImages
+    ? {
+        ...result,
+        attachedImageCount: imageBlocks.length,
+        imageContentTruncated: imageBlocks.length < result.images.length,
+        imageAttachmentWarnings,
+      }
+    : result;
+  return {
+    content: [
+      { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+      ...imageBlocks,
+    ],
+    structuredContent,
+  };
 }
 
 async function findExistingNoteUrl(noteId) {
@@ -644,10 +693,7 @@ async function handleMcp(req, res) {
         break;
       case "tools/call":
         result = await callTool(message.params?.name, message.params?.arguments || {});
-        result = {
-          content: [{ type: "text", text: JSON.stringify(result, null, 2) }],
-          structuredContent: result,
-        };
+        result = await formatToolResult(message.params?.name, result);
         break;
       case "resources/list":
         result = { resources: [] };
